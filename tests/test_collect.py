@@ -33,6 +33,14 @@ def test_numbered_department_mailbox_still_recognised():
     assert picked == "sales3@zavod.ru"
 
 
+def test_department_word_in_any_part_of_the_address():
+    """mg_job@ — тоже отдел кадров, хотя «job» стоит не первым."""
+    picked = pick_email(_facts(["mg_job@zavod.ru", "opt@zavod.ru"]), "zavod.ru")
+    assert picked == "opt@zavod.ru"
+    picked = pick_email(_facts(["zavod-vacancy@zavod.ru", "info@zavod.ru"]), "zavod.ru")
+    assert picked == "info@zavod.ru"
+
+
 def test_no_emails_returns_empty():
     assert pick_email(_facts([]), "zavod.ru") == ""
 

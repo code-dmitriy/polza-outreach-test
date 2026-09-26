@@ -84,9 +84,32 @@ def _links(soup: BeautifulSoup, base: str, pattern: re.Pattern) -> list[str]:
     return out
 
 
-def industry_pages() -> list[str]:
+def industry_pages() -> list[tuple[str, str]]:
+    """Пары (адрес страницы отрасли, её название).
+
+    Название берём из текста ссылки, а не из адреса: в адресе лежит
+    транслитерированный огрызок вроде legkaya_promyshlennos, и в сдаваемой
+    таблице он выглядит как ошибка выгрузки.
+    """
     soup = _soup(ROOT)
-    return _links(soup, ROOT, INDUSTRY_RE) if soup else []
+    if not soup:
+        return []
+    out: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for a in soup.find_all("a", href=True):
+        url = urljoin(ROOT, a["href"]).split("#")[0]
+        if not INDUSTRY_RE.search(url) or url in seen:
+            continue
+        seen.add(url)
+        name = re.sub(r"\s+", " ", a.get_text(" ", strip=True)).strip()
+        out.append((url, name or _slug_name(url)))
+    return out
+
+
+def _slug_name(industry_url: str) -> str:
+    """Запасной вариант, если у ссылки не оказалось текста."""
+    slug = industry_url.rstrip(".html").rsplit("/", 1)[-1]
+    return slug.replace("_", " ").capitalize()
 
 
 def category_pages(industry_url: str) -> list[str]:
@@ -153,7 +176,7 @@ def parse_company(url: str, industry: str = "") -> Company | None:
 
 
 def collect(limit: int = 60, per_category: int = 8,
-            industries: list[str] | None = None) -> list[Company]:
+            industries: list[tuple[str, str]] | None = None) -> list[Company]:
     """Собрать компании, раскладывая выборку по отраслям.
 
     По `per_category` штук с категории — иначе вся база окажется из одной
@@ -174,8 +197,7 @@ def collect(limit: int = 60, per_category: int = 8,
     # ниши — для аутрича это плохо, один оффер на пятьдесят одинаковых заводов
     # проверяется хуже, чем несколько сегментов.
     by_industry: dict[str, list[str]] = {}
-    for industry_url in pages:
-        industry = industry_url.rstrip(".html").rsplit("/", 1)[-1].replace("_", " ")
+    for industry_url, industry in pages:
         categories = category_pages(industry_url)
         if categories:
             by_industry[industry] = categories

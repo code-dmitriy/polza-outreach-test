@@ -162,12 +162,31 @@ def _extract_facts(soup: BeautifulSoup, url: str) -> list[Fact]:
     return facts
 
 
+# Пункты меню и футера. Пунктуации между ними нет, поэтому по границе
+# предложения их не отрезать — ищем по словам.
+_NAV_WORDS = re.compile(
+    r".*(?:обратная связь|о компании|контакты|доставка и оплата|доставка|"
+    r"гарантия|корзина|личный кабинет|каталог|главная|вакансии|новости и акции)\s+",
+    re.I | re.S,
+)
+
+
 def _snap_to_words(text: str, start: int, end: int, pad: int = 90) -> str:
-    """Вырезка вокруг совпадения без обрубленных слов по краям."""
+    """Вырезка вокруг совпадения: без обрубленных слов и без хвоста меню."""
     left = text[max(0, start - pad):start]
     right = text[end:end + pad]
-    if " " in left:
-        left = left[left.index(" ") + 1:]
+
+    # Предпочитаем начать с начала предложения, если оно попало в окно.
+    sentence = re.search(r"[.!?]\s+(?=[А-ЯA-Z])", left)
+    if sentence:
+        left = left[sentence.end():]
+    else:
+        nav = _NAV_WORDS.match(left)
+        if nav:
+            left = left[nav.end():]
+        elif " " in left:
+            left = left[left.index(" ") + 1:]
+
     if " " in right:
         right = right[:right.rindex(" ")]
     return _clean(f"{left}{text[start:end]}{right}")

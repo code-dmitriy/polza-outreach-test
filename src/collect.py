@@ -66,9 +66,10 @@ class Lead:
 
 
 def _is_wrong_department(email: str) -> bool:
-    local = re.split(r"[._+-]", email.partition("@")[0].lower())[0]
-    local = re.sub(r"\d+$", "", local)
-    return local in WRONG_DEPARTMENT
+    """Смотрим все части адреса, а не только первую: отдел кадров пишут и как
+    hr@, и как mg_job@, и как zavod-vacancy@."""
+    parts = re.split(r"[._+-]", email.partition("@")[0].lower())
+    return any(re.sub(r"\d+$", "", part) in WRONG_DEPARTMENT for part in parts if part)
 
 
 def pick_email(facts: CompanyFacts, website: str) -> str:
