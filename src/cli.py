@@ -73,7 +73,7 @@ def cmd_collect(args: argparse.Namespace) -> int:
               f"{(lead.notes[0] if lead.notes else '')[:34]}")
 
     rows = to_rows(leads)
-    out_path = write_csv(rows, Path(args.out) / "task1_base.csv")
+    out_path = write_csv(rows, Path(args.out) / "task1_companies.csv")
 
     complete = sum(1 for lead in leads if lead.is_complete)
     with_email = sum(1 for lead in leads if lead.email)
@@ -180,6 +180,14 @@ def main(argv: list[str] | None = None) -> int:
     p_hh.set_defaults(func=cmd_hh_check)
 
     args = parser.parse_args(argv)
+
+    # Русская консоль Windows по умолчанию в cp1251 и падает на стрелках и
+    # тире из отчётов. Отчёты пишутся в utf-8 и не страдают, а вот вывод
+    # валится трейсбеком — первое, что увидит запустивший скрипт.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
+
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.WARNING,
         format="%(levelname)s %(name)s: %(message)s",

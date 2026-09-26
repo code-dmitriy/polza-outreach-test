@@ -15,10 +15,10 @@
 from __future__ import annotations
 
 import logging
-import os
 import re
 from dataclasses import dataclass
 
+from . import config
 from .site_facts import CompanyFacts
 
 log = logging.getLogger(__name__)
@@ -125,10 +125,15 @@ def _clean_short(text: str) -> str:
 # капслоком. Идут перед нормальным текстом, поэтому их срезаем, а не
 # выбрасываем всю строку — дальше обычно начинается то, что нужно.
 LEADING_JUNK = [
-    re.compile(r"^[\s–—-]*(?:пн|вт|ср|чт|пт|сб|вс)[.а-я]*[\s.:–—-]*.*?\d{1,2}:\d{2}\s*", re.I),
+    # Граница слова обязательна: под re.I «вс» совпадает с началом слова
+    # «Всероссийский», «сб» — со «Сборочное», и .*? доедает текст до первого
+    # времени. Хорошее описание молча превращалось в огрызок.
+    re.compile(r"^[\s–—-]*(?:пн|вт|ср|чт|пт|сб|вс)(?![а-яё])[.\s:–—-]*.*?\d{1,2}:\d{2}\s*", re.I),
     re.compile(r"^[^.!?]{0,40}?\d{1,2}:\d{2}\s+(?=[А-ЯA-Z])"),
     re.compile(r"^[\s|>—–-]*(?:главная|каталог|контакты|о компании|о нас)[\s|>—–:-]*", re.I),
     re.compile(r"^[-\s]*the dynamic portal engine[^.]*\.\s*", re.I),
+    re.compile(r"^(?:история|продукция|продукции|компания|качества|о нас|"
+               r"о компании|преимущества|новости|главная)\s+(?=[А-ЯA-Z])", re.I),
     re.compile(r"^(?:[A-ZА-ЯЁ][A-ZА-ЯЁ\s]{6,})(?=[А-ЯA-Z][а-яa-z]|\d)"),
 ]
 
@@ -191,6 +196,33 @@ def _tidy(text: str) -> str:
     return _capitalize(text.strip(" -–—|>:,;"))
 
 
+def _looks_like_menu(text: str) -> bool:
+    """Отличить связное описание от склейки пунктов меню и подписей блоков.
+
+    Скрипт собирает текст со страницы подряд, и если у компании нет описания,
+    в персонализацию склеиваются названия разделов: «Металлочерепица Профлист
+    Фальцевая кровля Ондулин». Формально это текст, но в письме он выдаёт
+    сборщика с первой строки.
+
+    Два признака, оба считаются по словам после первого:
+      * доля слов с заглавной буквы — в живом предложении их 10–20%,
+        в перечне разделов — от 40%;
+      * доля повторов — каталог перечисляет «средства для стирки, средства
+        для отбеливания», и уникальных слов в нём заметно меньше.
+    """
+    words = re.findall(r"[А-Яа-яЁёA-Za-z][\w-]*", text)
+    if len(words) < 5:
+        return False
+
+    tail = words[1:]
+    capitalized = sum(1 for w in tail if w[:1].isupper())
+    if len(tail) >= 5 and capitalized / len(tail) >= 0.40:
+        return True
+
+    unique = len({w.lower() for w in words})
+    return unique / len(words) < 0.65
+
+
 def _is_readable(text: str) -> bool:
     """Отсечь то, что технически «текст», но в письмо не годится.
 
@@ -201,7 +233,8 @@ def _is_readable(text: str) -> bool:
     letters = [c for c in text if c.isalpha()]
     if not letters:
         return False
-    readable = sum(1 for c in letters if "a" <= c.lower() <= "z" or "а" <= c.lower() <= "я")
+    readable = sum(1 for c in letters
+                   if "a" <= c.lower() <= "z" or "а" <= c.lower() <= "я" or c.lower() == "ё")
     if readable / len(letters) < 0.8:
         return False
 
@@ -215,7 +248,7 @@ def _is_readable(text: str) -> bool:
     if len(segments) >= 4 and sum(len(s) for s in segments) / len(segments) < 22:
         return False
 
-    if PAGE_JUNK.search(text) or AD_COPY.search(text):
+    if PAGE_JUNK.search(text) or AD_COPY.search(text) or _looks_like_menu(text):
         return False
 
     # Телефон посреди «факта» означает, что зацепили блок контактов, а не текст.
@@ -234,13 +267,26 @@ def _trim(text: str, limit: int = 260) -> str:
 
 def _anthropic(company: str, facts: CompanyFacts) -> Personalization:
     """Переписать вытащенные факты живым языком. Без ключа — не вызывается."""
-    import anthropic  # импорт внутри: без ключа зависимость не нужна
-
     base = _extractive(company, facts)
     if not base.usable:
         return base
 
-    client = anthropic.Anthropic()
+    # Пакет не в requirements: он нужен только этому режиму. Если его нет
+    # или нет ключа — молча работаем дальше на extractive, а не падаем.
+    try:
+        import anthropic
+    except ImportError:
+        log.warning("пакет anthropic не установлен (pip install anthropic), "
+                    "персонализация собрана извлечением с сайта")
+        return base
+
+    key = config.anthropic_key()
+    if not key:
+        log.warning("ANTHROPIC_API_KEY не найден в .env, "
+                    "персонализация собрана извлечением с сайта")
+        return base
+
+    client = anthropic.Anthropic(api_key=key)
     prompt = (
         "Ты пишешь одну строку персонализации для холодного B2B-письма.\n"
         f"Компания: {company}\n"
@@ -269,7 +315,7 @@ PROVIDERS = {"extractive": _extractive, "anthropic": _anthropic}
 
 def build(company: str, facts: CompanyFacts, provider: str = "auto") -> Personalization:
     if provider == "auto":
-        provider = "anthropic" if os.getenv("ANTHROPIC_API_KEY") else "extractive"
+        provider = "anthropic" if config.anthropic_key() else "extractive"
     if provider not in PROVIDERS:
         raise ValueError(f"неизвестный провайдер: {provider}")
     return PROVIDERS[provider](company, facts)

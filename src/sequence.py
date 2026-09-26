@@ -65,9 +65,22 @@ def render(body: str, company: str = "", name: str = "", personalization: str = 
     фразой, иначе в письме остаётся дыра или, того хуже, скобки."""
     return (body
             .replace("{{персонализация}}", personalization.strip() or fallback)
-            .replace("{{Имя}}", name or "коллеги")
+            .replace("{{Имя}}", _greeting_name(name))
             .replace("{{Компания}}", company or "вашей командой")
             .replace("{{Отправитель}}", sender or "Никита"))
+
+
+# В колонке «Контакт» может стоять прочерк или «отдел продаж»: имени компания
+# не публикует. Подставлять это в приветствие нельзя — «Здравствуйте, —.»
+# убивает письмо вернее, чем отсутствие имени.
+_NOT_A_GREETING = {"", "—", "-", "не указано", "отдел продаж", "приемная", "приёмная"}
+
+
+def _greeting_name(name: str) -> str:
+    cleaned = (name or "").split("(")[0].strip()
+    if cleaned.lower() in _NOT_A_GREETING:
+        return "коллеги"
+    return cleaned.split()[1] if len(cleaned.split()) >= 3 else cleaned
 
 
 def to_markdown(seq: Sequence) -> str:

@@ -70,12 +70,29 @@ class RowAudit:
         return self.status == OK
 
 
+REQUIRED_COLUMNS = ("company", "email", "website")
+
+
 def load_rows(path: Path) -> list[dict[str, str]]:
+    """Прочитать входную базу, проверив заголовки.
+
+    Без проверки файл с другими заголовками читается как набор пустых строк,
+    и скрипт бодро сообщает, что база чистая. Для задачи, весь смысл которой
+    в поиске ошибок, это худший из возможных отказов.
+    """
+    if not path.exists():
+        raise SystemExit(f"Файл не найден: {path}")
+
     with path.open(encoding="utf-8-sig", newline="") as fh:
-        return [
-            {k: (v or "").strip() for k, v in row.items()}
-            for row in csv.DictReader(fh)
-        ]
+        reader = csv.DictReader(fh)
+        missing = [c for c in REQUIRED_COLUMNS if c not in (reader.fieldnames or [])]
+        if missing:
+            raise SystemExit(
+                f"В файле {path.name} нет обязательных колонок: "
+                f"{', '.join(missing)}. Найдены: "
+                f"{', '.join(reader.fieldnames or ['(пусто)'])}"
+            )
+        return [{k: (v or "").strip() for k, v in row.items()} for row in reader]
 
 
 def _site_mentions_company(website: str, company: str) -> tuple[bool | None, str]:
@@ -117,7 +134,7 @@ def _site_mentions_company(website: str, company: str) -> tuple[bool | None, str
     # Долю считаем по видимому тексту: в meta-тегах у любого WordPress лежит
     # английская обвязка плагинов, из-за неё китайский сайт выглядит латинским.
     letters = [c for c in body_text if c.isalpha()]
-    latin = sum(1 for c in letters if "a" <= c <= "z" or "а" <= c <= "я")
+    latin = sum(1 for c in letters if "a" <= c <= "z" or "а" <= c <= "я" or c == "ё")
     if letters and latin / len(letters) < 0.5:
         return None, "сайт не на латинице/кириллице — автоматически не сверить, нужна ручная проверка"
 
@@ -136,6 +153,7 @@ def _collect_domain_pool(rows: list[dict[str, str]]) -> list[str]:
 
 
 def audit(rows: list[dict[str, str]], verify_online: bool = True) -> list[RowAudit]:
+    check_mx = verify_online  # офлайн — значит и без DNS, иначе «офлайн» лукавит
     results: list[RowAudit] = []
     pool = _collect_domain_pool(rows)
 
@@ -153,7 +171,7 @@ def audit(rows: list[dict[str, str]], verify_online: bool = True) -> list[RowAud
             and registrable_domain(email_domain) == registrable_domain(website)
         )
 
-        verdict = check_email(email)
+        verdict = check_email(email, check_mx=check_mx)
         # Невалидный синтаксис / мёртвый домен — это ошибка данных,
         # ролевой ящик и публичная почта — замечание к качеству.
         for problem in verdict.problems:
@@ -271,7 +289,7 @@ def write_report(results: list[RowAudit], out_dir: Path) -> tuple[Path, Path]:
     csv_path = out_dir / "task4_audit.csv"
     md_path = out_dir / "task4_audit.md"
 
-    confirm_label = {True: "да", False: "нет", None: "сайт не ответил"}
+    confirm_label = {True: "да", False: "нет", None: "сверить не удалось"}
 
     with csv_path.open("w", encoding="utf-8-sig", newline="") as fh:
         w = csv.writer(fh)
@@ -287,7 +305,8 @@ def write_report(results: list[RowAudit], out_dir: Path) -> tuple[Path, Path]:
                 a.row, a.company, a.email, a.website, a.status, a.recommendation,
                 a.site_score, a.email_score,
                 "да" if a.email_matches_site else "нет",
-                confirm_label[a.site_confirms_company],
+                confirm_label[a.site_confirms_company] if a.site_confirms_company is not None
+                else (a.site_evidence or "сайт не ответил"),
                 a.suggested_domain, a.suggested_owner_row or "",
                 "; ".join(a.issues), "; ".join(a.notes),
             ])

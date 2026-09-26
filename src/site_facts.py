@@ -71,6 +71,16 @@ def _clean(text: str) -> str:
     return re.sub(r"\s+", " ", (text or "")).strip()
 
 
+def _cut(text: str, limit: int) -> str:
+    """Обрезать по границе слова. Срез по символам оставляет огрызки вроде
+    «с высокими экономическими, прои», и они уезжают прямо в письмо."""
+    text = text.strip()
+    if len(text) <= limit:
+        return text
+    head = text[:limit]
+    return (head.rsplit(" ", 1)[0] if " " in head else head).rstrip(" ,;:-–—")
+
+
 def _extract_emails(html: str, soup: BeautifulSoup) -> list[str]:
     found: list[str] = []
     for a in soup.select('a[href^="mailto:"]'):
@@ -81,7 +91,7 @@ def _extract_emails(html: str, soup: BeautifulSoup) -> list[str]:
 
     out: list[str] = []
     for addr in found:
-        addr = addr.strip(".,;:()<>\"'").lower()
+        addr = re.sub(r"^mailto:", "", addr.strip(".,;:()<>\"'").lower())
         if EMAIL_NOISE.search(addr) or addr in out:
             continue
         # Отсекаем «хвосты» вида info@site.comЗвоните
@@ -171,7 +181,7 @@ def _first_paragraph(soup: BeautifulSoup) -> str:
             continue
         if text.count("|") > 2 or text.count("·") > 2:  # хлебные крошки/меню
             continue
-        return text[:400]
+        return _cut(text, 400)
     return ""
 
 
@@ -262,7 +272,7 @@ def collect(domain: str, max_pages: int = 5) -> CompanyFacts:
         out.pages_seen.append(url)
 
         if not out.title and soup.title:
-            out.title = _clean(soup.title.get_text(" ", strip=True))[:200]
+            out.title = _cut(_clean(soup.title.get_text(" ", strip=True)), 200)
 
         if not out.description:
             for selector, attr in (
@@ -271,14 +281,14 @@ def collect(domain: str, max_pages: int = 5) -> CompanyFacts:
             ):
                 tag = soup.select_one(selector)
                 if tag and _clean(tag.get(attr, "")):
-                    out.description = _clean(tag[attr])[:400]
+                    out.description = _cut(_clean(tag[attr]), 400)
                     out.description_source = url
                     break
 
         if not out.headline:
             h = soup.find(["h1", "h2"])
             if h:
-                out.headline = _clean(h.get_text(" ", strip=True))[:200]
+                out.headline = _cut(_clean(h.get_text(" ", strip=True)), 200)
 
         if not out.lead_paragraph:
             out.lead_paragraph = _first_paragraph(soup)

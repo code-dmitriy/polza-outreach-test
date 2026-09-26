@@ -129,11 +129,17 @@ def build_lead(company: Company, provider: str = "auto", check_mx: bool = True) 
         lead.notes.append("имя ЛПР на сайте не указано")
 
     p = build_personalization(company.name, lead.facts, provider=provider)
-    lead.personalization = p.text
-    lead.personalization_source = p.source_url
-    lead.confidence = p.confidence
-    if not p.usable:
-        lead.notes.append("пригодного факта на сайте нет — письмо без персонализации")
+    if p.usable:
+        lead.personalization = p.text
+        lead.personalization_source = p.source_url
+        lead.confidence = p.confidence
+    else:
+        # Фильтр качества уже решил, что текст в письмо не годится: склейка
+        # пунктов меню, реклама, обрывок. Раньше он всё равно попадал в
+        # таблицу, а флаг только дописывал примечание — в итоге в базе
+        # оказывались строки, которые собственный тест проекта запрещает.
+        lead.notes.append("связного описания на сайте нет — "
+                          "письмо без персонализации, нейтральный вариант")
 
     return lead
 
