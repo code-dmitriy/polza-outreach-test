@@ -23,7 +23,7 @@ log = logging.getLogger(__name__)
 CONTACT_PATHS = [
     "", "/contacts", "/contacts/", "/kontakty", "/kontakty/", "/contact",
     "/contact-us", "/about", "/about/", "/about-us", "/o-kompanii",
-    "/o-nas", "/company", "/company/",
+    "/o-nas", "/company", "/company/", "/rukovodstvo", "/team", "/komanda",
 ]
 
 EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
@@ -91,22 +91,60 @@ def _extract_emails(html: str, soup: BeautifulSoup) -> list[str]:
     return out
 
 
-def _extract_names(soup: BeautifulSoup) -> list[str]:
-    """Имена ЛПР, если компания сама их публикует (директор, руководитель отдела).
+# Слова, которые встают на место фамилии: это хвост предыдущей фразы,
+# прилипший к должности при разборе сплошного текста страницы.
+_NOT_A_NAME = {
+    "холдинг", "холдинга", "сеть", "сети", "компания", "компании", "группа",
+    "группы", "завод", "завода", "фабрика", "фабрики", "отдел", "отдела",
+    "предприятие", "предприятия", "производство", "производства", "общество",
+    "россия", "россии", "москва", "москвы", "директор", "директора",
+    "руководитель", "основатель", "владелец", "розничной", "оптовой",
+    "торговой", "управляющей", "дочерней", "нашей", "своей", "этой",
+}
 
-    Берём только то, что напечатано рядом с должностью на сайте компании —
-    никакого сведения профилей из разных источников.
+_ROLES = (
+    r"генеральн\w+ директор|коммерческ\w+ директор|исполнительн\w+ директор|"
+    r"директор по развитию|директор по продажам|руководител\w+ отдела продаж|"
+    r"ген\.?\s*директор|основател\w+|владелец|собственник"
+)
+
+# Регистр в имени значим. Под общим флагом re.I шаблон [А-ЯЁ][а-яё]+ ловит
+# любое слово, и в имя уезжает конец предыдущего предложения — так в базе
+# появился «холдинга Владимир Петрович». Поэтому нечувствительность к
+# регистру включаем только на названии должности.
+_NAME = r"[А-ЯЁ][а-яё]{2,}(?:\s+[А-ЯЁ][а-яё]{2,}){1,2}"
+
+_ROLE_THEN_NAME = re.compile(rf"(?i:({_ROLES}))[\s\-–—:,]+({_NAME})")
+_NAME_THEN_ROLE = re.compile(rf"({_NAME})\s*[,\-–—:]\s*(?i:({_ROLES}))")
+
+
+def _looks_like_person(name: str) -> bool:
+    words = name.split()
+    if not 2 <= len(words) <= 3:
+        return False
+    return all(word.lower() not in _NOT_A_NAME for word in words)
+
+
+def _extract_names(soup: BeautifulSoup) -> list[str]:
+    """Имена ЛПР, если компания сама их публикует рядом с должностью.
+
+    Берём только то, что напечатано на сайте самой компании: никакого
+    сведения профилей из разных источников мы не делаем.
     """
     text = _clean(soup.get_text(" ", strip=True))
-    pattern = re.compile(
-        r"(генеральн\w+ директор|коммерческ\w+ директор|директор по развитию|"
-        r"руководител\w+ отдела продаж|основател\w+|владелец)"
-        r"[\s\-–—:,]*([А-ЯЁ][а-яё]+\s+[А-ЯЁ][а-яё]+(?:\s+[А-ЯЁ][а-яё]+)?)",
-        re.I,
-    )
+    found: list[tuple[str, str]] = []
+
+    for role, name in _ROLE_THEN_NAME.findall(text):
+        found.append((name, role))
+    for name, role in _NAME_THEN_ROLE.findall(text):
+        found.append((name, role))
+
     names: list[str] = []
-    for role, name in pattern.findall(text):
-        entry = f"{_clean(name)} ({_clean(role).lower()})"
+    for name, role in found:
+        name = _clean(name)
+        if not _looks_like_person(name):
+            continue
+        entry = f"{name} ({_clean(role).lower()})"
         if entry not in names:
             names.append(entry)
     return names[:3]
@@ -192,7 +230,7 @@ def _snap_to_words(text: str, start: int, end: int, pad: int = 90) -> str:
     return _clean(f"{left}{text[start:end]}{right}")
 
 
-def collect(domain: str, max_pages: int = 4) -> CompanyFacts:
+def collect(domain: str, max_pages: int = 5) -> CompanyFacts:
     """Обойти главную и страницы контактов, собрать почту, имена и факты."""
     domain = re.sub(r"^\w+://", "", (domain or "").strip()).split("/")[0]
     out = CompanyFacts(domain=domain)
