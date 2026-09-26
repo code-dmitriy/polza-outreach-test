@@ -138,9 +138,20 @@ def build_lead(company: Company, provider: str = "auto", check_mx: bool = True) 
     return lead
 
 
+def sort_for_delivery(leads: list[Lead]) -> list[Lead]:
+    """Готовые строки наверх, недоделанные вниз.
+
+    Порядок внутри групп не трогаем — он даёт чередование отраслей. Смысл
+    в первом впечатлении: открывший таблицу должен сразу увидеть рабочие
+    контакты, а не строку с неответившим сайтом. Недоделанные при этом
+    остаются в файле с объяснением, по ним видно качество источника.
+    """
+    return sorted(leads, key=lambda lead: (not lead.is_complete, not bool(lead.email)))
+
+
 def to_rows(leads: list[Lead]) -> list[dict[str, str]]:
     rows = []
-    for lead in leads:
+    for lead in sort_for_delivery(leads):
         c = lead.company
         quality = "—"
         if lead.verdict:

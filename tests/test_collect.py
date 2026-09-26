@@ -57,3 +57,25 @@ def test_russian_address_filter():
     other = Company(name="Завод", address="86000, Украина, Донецкая область")
     assert ru.is_russian
     assert not other.is_russian
+
+
+def test_complete_rows_come_first():
+    """Первая строка таблицы не должна быть пустой: проверяющий увидит её
+    раньше всего и решит, что база мусорная."""
+    from src.collect import Lead, sort_for_delivery
+    from src.emailcheck import check
+    from src.site_facts import CompanyFacts
+
+    def lead(name, email="", pers=""):
+        l = Lead(company=Company(name=name), facts=CompanyFacts(domain="x.ru"))
+        l.email = email
+        l.verdict = check(email, check_mx=False) if email else None
+        l.personalization = pers
+        return l
+
+    empty = lead("Сайт не открылся")
+    half = lead("Почта есть, факта нет", "info@x.ru")
+    full = lead("Готовая", "sales@x.ru", "Производит станки с 1998 года.")
+
+    order = [l.company.name for l in sort_for_delivery([empty, half, full])]
+    assert order == ["Готовая", "Почта есть, факта нет", "Сайт не открылся"]
