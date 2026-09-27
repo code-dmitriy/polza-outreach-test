@@ -11,7 +11,6 @@
 from __future__ import annotations
 
 import csv
-import logging
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -22,8 +21,6 @@ from .personalize import build as build_personalization
 from .site_facts import CompanyFacts, collect as collect_facts
 from .sources.wikiprom import Company
 from .textnorm import registrable_domain
-
-log = logging.getLogger(__name__)
 
 # Порядок предпочтения ящиков: сначала те, что ведут в продажи.
 MAILBOX_PRIORITY = [
@@ -42,7 +39,8 @@ WRONG_DEPARTMENT = (
 COLUMNS = [
     "Компания", "Сайт", "Контакт", "Email", "Персонализация",
     "Отрасль", "Регион", "Отдел продаж", "Качество почты",
-    "Источник факта", "Уверенность", "Карточка в справочнике", "Комментарий",
+    "Страница с почтой", "Источник факта", "Уверенность",
+    "Карточка в справочнике", "Комментарий",
 ]
 
 
@@ -178,6 +176,8 @@ def to_rows(leads: list[Lead]) -> list[dict[str, str]]:
             "Регион": c.region,
             "Отдел продаж": "да" if c.has_sales_department else "не указан",
             "Качество почты": quality,
+            "Страница с почтой": (lead.facts.email_sources.get(lead.email, "")
+                                  if lead.facts and lead.email else ""),
             "Источник факта": lead.personalization_source,
             "Уверенность": lead.confidence,
             "Карточка в справочнике": c.source_url,

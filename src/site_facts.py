@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass, field
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin
 
 from bs4 import BeautifulSoup
 
@@ -31,7 +31,12 @@ EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 # Мусорные адреса из шаблонов, CDN и примеров в вёрстке.
 EMAIL_NOISE = re.compile(
     r"(example\.|sentry\.|wixpress|\.png$|\.jpg$|\.webp$|\.gif$|\.svg$"
-    r"|@sentry|@2x|domain\.com|your-?mail|mail@mail)", re.I
+    r"|@sentry|@2x|domain\.com|your-?mail|mail@mail"
+    # Почта хостера и регистратора в подвале сайта. Она принадлежит не
+    # компании, а тем, кто ей сайт держит: письмо уйдёт мимо адресата,
+    # а сам лид окажется фиктивным.
+    r"|@(?:beget|reg|timeweb|nic|jino|masterhost|sweb|hostland|ihc|firstvds"
+    r"|hostinger|spaceweb|majordomo)\.(?:ru|com)$)", re.I
 )
 
 # Конкретика, на которой держится персонализация: цифры и даты, а не прилагательные.
@@ -205,7 +210,9 @@ def _extract_facts(soup: BeautifulSoup, url: str) -> list[Fact]:
             # Окно вокруг совпадения, обрезанное по границам слов: «с 2014 год»
             # само по себе ни о чём не говорит, нужен контекст.
             snippet = _snap_to_words(text, m.start(), m.end(), pad=90)
-        if len(snippet) >= 40:
+        # Порог низкий намеренно: «На рынке России с 2014 года» — 27 знаков,
+        # и это ровно тот факт, ради которого всё и затевалось.
+        if len(snippet) >= 25:
             facts.append(Fact(text=snippet, kind=kind, source_url=url))
     return facts
 
@@ -237,7 +244,42 @@ def _snap_to_words(text: str, start: int, end: int, pad: int = 90) -> str:
 
     if " " in right:
         right = right[:right.rindex(" ")]
-    return _clean(f"{left}{text[start:end]}{right}")
+
+    snippet = _clean(f"{left}{text[start:end]}{right}")
+    return _tighten_labelled(snippet, _clean(text[start:end]))
+
+
+def _tighten_labelled(snippet: str, anchor: str) -> str:
+    """Сузить вырезку до одной подписи блока, если вокруг только они.
+
+    На сайтах без описания цифра живёт внутри плитки: «Гарантия качества
+    На рынке России с 2014 года Консультации Поможем с выбором». Точек нет,
+    предложений нет — только заголовки блоков подряд. Берём тот блок, внутри
+    которого нашлось совпадение, и отбрасываем соседние.
+
+    Применяем только когда в вырезке нет ни одного знака конца предложения
+    и блоков заметно много: в обычной прозе слова с заглавной — это имена
+    собственные, и резать по ним нельзя.
+    """
+    if re.search(r"[.!?]", snippet):
+        return snippet
+
+    starts = [m.start() for m in re.finditer(r"(?<=[а-яёa-z]\s)[А-ЯЁA-Z]", snippet)]
+    if len(starts) < 2 or anchor not in snippet:
+        return snippet
+
+    pos = snippet.index(anchor)
+    right = min([i for i in starts if i > pos], default=len(snippet))
+
+    # Слева двигаемся по границам, пока блок не наберёт осмысленную длину:
+    # ближайшая граница может оказаться именем собственным внутри блока
+    # («России» в «На рынке России с 2014 года»), а не его началом.
+    candidates = sorted((i for i in starts if i <= pos), reverse=True) + [0]
+    for left in candidates:
+        tightened = snippet[left:right].strip(" ,;:-–—")
+        if len(tightened) >= 24:
+            return tightened
+    return snippet
 
 
 def collect(domain: str, max_pages: int = 5) -> CompanyFacts:
@@ -312,7 +354,3 @@ def collect(domain: str, max_pages: int = 5) -> CompanyFacts:
               domain, len(out.pages_seen), len(out.emails), len(out.facts))
     return out
 
-
-def same_domain(email: str, domain: str) -> bool:
-    host = urlparse(f"//{domain}").netloc or domain
-    return email.partition("@")[2].endswith(host.replace("www.", ""))

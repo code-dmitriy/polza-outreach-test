@@ -8,14 +8,11 @@
 from __future__ import annotations
 
 import csv
-import logging
 from pathlib import Path
 
-from .audit import OK, RowAudit
+from .audit import RowAudit
 from .personalize import build
 from .site_facts import collect
-
-log = logging.getLogger(__name__)
 
 COLUMNS = [
     "Компания", "Email", "Сайт", "Статус аудита", "Персонализация",
@@ -42,7 +39,7 @@ def enrich(results: list[RowAudit], provider: str = "auto") -> list[dict[str, st
             "Комментарий": a.recommendation,
         }
 
-        if a.status != OK:
+        if not a.safe_to_personalize:
             row["Комментарий"] = f"не персонализировано: {a.recommendation}"
             rows.append(row)
             continue

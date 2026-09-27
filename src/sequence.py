@@ -46,6 +46,7 @@ class Sequence:
     variables: dict[str, str]
     personalization_fallback: str
     emails: list[Email]
+    schedule_note: str = ""
 
 
 def load(path: Path) -> Sequence:
@@ -56,6 +57,7 @@ def load(path: Path) -> Sequence:
         variables=data["variables"],
         personalization_fallback=data["personalization_fallback"],
         emails=[Email(**e) for e in data["emails"]],
+        schedule_note=data.get("schedule_note", ""),
     )
 
 
@@ -101,6 +103,8 @@ def to_markdown(seq: Sequence) -> str:
         f"пустую переменную в письмо не выпускаем.",
         "",
     ]
+    if seq.schedule_note:
+        lines += [f"**Сроки отправки.** {seq.schedule_note}", ""]
     for e in seq.emails:
         when = "в день старта" if e.day == 0 else f"через {e.day} дн. после первого"
         lines += [
@@ -124,7 +128,8 @@ def to_csv(seq: Sequence, path: Path) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8-sig", newline="") as fh:
         w = csv.writer(fh)
-        w.writerow(["Шаг", "День отправки", "Цель", "Тема", "Текст", "Слов", "Почему так"])
+        w.writerow(["Шаг", "День от первого письма", "Цель", "Тема", "Текст",
+                    "Слов", "Почему так"])
         for e in seq.emails:
             w.writerow([e.step, e.day, e.goal, e.subject, e.body, e.word_count, e.why])
     return path

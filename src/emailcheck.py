@@ -56,7 +56,6 @@ class EmailVerdict:
     is_freemail: bool = False
     is_disposable: bool = False
     has_mx: bool | None = None          # None = проверка не проводилась / DNS недоступен
-    mx_hosts: list[str] = field(default_factory=list)
     problems: list[str] = field(default_factory=list)
 
     @property
@@ -104,7 +103,6 @@ def check(email: str, check_mx: bool = True) -> EmailVerdict:
 
     if check_mx:
         hosts = _mx_lookup(domain)
-        v.mx_hosts = list(hosts)
         v.has_mx = bool(hosts)
         if not hosts:
             v.problems.append("у домена нет MX-записи — письмо не доставится")

@@ -43,3 +43,22 @@ def test_empty_personalization_falls_back_instead_of_leaving_a_hole():
                   fallback=SEQ.personalization_fallback)
     assert SEQ.personalization_fallback in text
     assert "{{" not in text
+
+
+def test_first_email_fits_the_limit_with_the_longest_personalization():
+    """word_count считает {{персонализация}} одним словом. Проверяем худший
+    случай: подставляем персонализацию предельной длины и пересчитываем.
+    Тема письма в лимит по ТЗ не входит, но пусть будет видно и её."""
+    import re
+
+    longest = ("Комбинат Алтайтара — производство гофрокартона и гофротары полного "
+               "цикла. Компания создана в 2007 году в Барнауле, столице Алтайского "
+               "края, и поставляет упаковку предприятиям пищевой промышленности "
+               "Сибири и Урала.")
+    assert len(longest) <= 260, "персонализация длиннее той, что выдаёт скрипт"
+
+    body = render(SEQ.emails[0].body, company="Алтайтара", name="Иван",
+                  personalization=longest, sender="Никита",
+                  fallback=SEQ.personalization_fallback)
+    words = len(re.findall(r"[0-9A-Za-zА-Яа-яЁё][\w–-]*", body))
+    assert words <= WORD_LIMIT, f"{words} слов при лимите {WORD_LIMIT}"

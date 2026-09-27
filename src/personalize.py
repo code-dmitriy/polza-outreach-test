@@ -27,6 +27,9 @@ MAX_SENTENCES = 2
 # Короче этого персонализация ничего не сообщает: «Новости компании и акции»
 # формально текст, но в письме выглядит как ошибка скрипта.
 MIN_USABLE_LENGTH = 60
+# Для факта с цифрой порог ниже: «На рынке России с 2014 года» — двадцать семь
+# символов, но это именно то, ради чего персонализация и нужна.
+MIN_FACT_USABLE_LENGTH = 25
 # Маркетинговая вода: если предложение состоит только из неё, оно не факт.
 FLUFF = re.compile(
     r"^(индивидуальн\w+ подход|высок\w+ качеств\w+|лучш\w+ цен\w+|"
@@ -42,21 +45,45 @@ PAGE_JUNK = re.compile(
     r"ноябр|декабр)\w*\s+подробнее|подробнее\s*$|читать далее|"
     r"^купить\s|интернет-магазин\w*\s+бренда|доставка по (росси|москв)|"
     r"[✔✓☑]|добавить в корзину|акции и скидки|контактные данные компании|"
-    r"официальный сайт\s*$|новости компании)",
+    r"официальный сайт\s*$|новости компании|"
+    # заглушки и служебные надписи
+    r"работаем над улучшением (?:нашего )?сайта|заголовок|переключатель меню|"
+    r"проложить маршрут|узнать больше о компании|задать вопрос|"
+    # текст не про эту компанию: документация хостинга
+    r"прилинковать домен|направление домена|директори[юя] на сервере|"
+    # объявления, которые устареют завтра
+    r"уходит в (?:ежегодный )?корпоративный отпуск|отметьте в (?:своих )?календар|"
+    r"сообщить о контрафакте|"
+    # телефоны в любом виде
+    r"8\s*[\(-]?\s*\d{3}\s*[\)-]?\s*\d{3}[\s-]?\d{2}[\s-]?\d{2}|8\s*800\s*\d|"
+    # почтовый адрес и склад
+    r"\bул\.\s|\bд\.\s?\d|\bшоссе\b|\bкорпус\s?\d|\bуч\.№|"
+    # имена файлов картинок, утёкшие в текст
+    r"\b\d{3,4}_\d{3,4}\b|\b[a-z]+-[a-z]+-[a-z]+\b)",
     re.I,
 )
+
+# Счётчики, которые подгружаются скриптом: в HTML остаются нули, и в текст
+# уезжает «0 тонн яблок перерабатывается в сутки».
+EMPTY_COUNTER = re.compile(r"(?:^|\s)0\s+[а-яёa-z]", re.I)
+
+# Текст, начинающийся с голых цифр: «2022 2015 Завод занимает…» — это
+# подписи под годами в ленте достижений.
+LEADING_NUMBERS = re.compile(r"^\W*\d[\d\s.,]{2,}(?=[А-ЯA-Zа-яa-z])")
 
 # Рекламный текст от первого лица и ценовые обещания: это копирайтинг с
 # лендинга, а не факт о компании. В письме такое читается как насмешка.
 AD_COPY = re.compile(
     r"(^я\s+(успе|купи|заказа|получи)|по сам[оы]й (низкой|выгодной) цене|"
     r"только на сайте|успей|спешите|звоните прямо сейчас|скидк[аи] до|"
-    r"^оптовые скидки|скидки при заказе)",
+    r"^оптовые скидки|скидки при заказе|"
+    r"обратитесь к нашим специалистам|получите профессиональную консультацию|"
+    r"наш[ие]+ специалист\w+ (?:свяжутся|помогут)|нашего банка)",
     re.I,
 )
 
 # Минимальная длина куска, который вообще имеет смысл приклеивать к описанию.
-MIN_FACT_LENGTH = 30
+MIN_FACT_LENGTH = 25
 
 
 @dataclass
@@ -68,9 +95,12 @@ class Personalization:
 
     @property
     def usable(self) -> bool:
-        return (len(self.text) >= MIN_USABLE_LENGTH
-                and self.confidence != "none"
-                and _is_readable(self.text))
+        if self.confidence == "none" or not _is_readable(self.text):
+            return False
+        floor = (MIN_FACT_USABLE_LENGTH
+                 if self.confidence == "high" and re.search(r"\d", self.text)
+                 else MIN_USABLE_LENGTH)
+        return len(self.text) >= floor
 
 
 def _first_sentences(text: str, limit: int = MAX_SENTENCES) -> str:
@@ -95,7 +125,7 @@ def _extractive(company: str, facts: CompanyFacts) -> Personalization:
                 text = f"{lead.rstrip('.')}. {text}"
             # Склейка могла оставить обрывок в середине — чистим ещё раз.
             text = _capitalize(_drop_dangling_tail(text))
-            if _is_readable(text) and len(text) >= MIN_USABLE_LENGTH:
+            if _is_readable(text) and len(text) >= MIN_FACT_USABLE_LENGTH:
                 return Personalization(_trim(text), fact.source_url, "high", "extractive")
 
     # Дальше — по убыванию надёжности: meta-описание, абзац «о компании»,
@@ -135,6 +165,7 @@ LEADING_JUNK = [
     re.compile(r"^(?:история|продукция|продукции|компания|качества|о нас|"
                r"о компании|преимущества|новости|главная)\s+(?=[А-ЯA-Z])", re.I),
     re.compile(r"^(?:[A-ZА-ЯЁ][A-ZА-ЯЁ\s]{6,})(?=[А-ЯA-Z][а-яa-z]|\d)"),
+    re.compile(r"^\W*\d[\d\s.,]{2,}(?=[А-ЯA-Z])"),
 ]
 
 
@@ -189,9 +220,22 @@ def _capitalize(text: str) -> str:
     return text[:1].upper() + text[1:] if text else text
 
 
+# «МИССИЯ КОМПАНИИ заключается в удовлетворении…»: капслоком набран заголовок,
+# который на странице стоит отдельной строкой, а в тексте слипается со
+# следующей фразой. Срезать его нельзя — останется «Заключается в…»,
+# поэтому просто приводим к обычному написанию.
+_SHOUTING_HEAD = re.compile(r"^((?:[A-ZА-ЯЁ]{3,}\s+){1,4})(?=[а-яa-z])")
+
+
+def _calm_shouting(text: str) -> str:
+    m = _SHOUTING_HEAD.match(text)
+    return text[:m.end(1)].lower() + text[m.end(1):] if m else text
+
+
 def _tidy(text: str) -> str:
     """Полный проход: шапка, хвост, оборванное окончание."""
-    text = _strip_leading_junk(re.sub(r"\s+", " ", text or "").strip())
+    text = _calm_shouting(re.sub(r"\s+", " ", text or "").strip())
+    text = _strip_leading_junk(text)
     text = _drop_dangling_tail(_cut_trailing_junk(text))
     return _capitalize(text.strip(" -–—|>:,;"))
 
@@ -248,7 +292,8 @@ def _is_readable(text: str) -> bool:
     if len(segments) >= 4 and sum(len(s) for s in segments) / len(segments) < 22:
         return False
 
-    if PAGE_JUNK.search(text) or AD_COPY.search(text) or _looks_like_menu(text):
+    if (PAGE_JUNK.search(text) or AD_COPY.search(text) or _looks_like_menu(text)
+            or EMPTY_COUNTER.search(text) or LEADING_NUMBERS.match(text)):
         return False
 
     # Телефон посреди «факта» означает, что зацепили блок контактов, а не текст.
