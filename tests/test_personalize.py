@@ -22,7 +22,7 @@ def test_real_description_passes():
                     "и в критические дни. Состоят из натуральной целлюлозы.",
         description_source="https://zavod.ru"))
     assert p.usable
-    assert "целлюлоз" in p.text
+    assert "женской гигиены" in p.text
 
 
 def test_fact_with_a_number_wins_over_description():

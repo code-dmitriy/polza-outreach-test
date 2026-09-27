@@ -19,7 +19,7 @@ import re
 from dataclasses import dataclass
 
 from . import config
-from .site_facts import CompanyFacts
+from .site_facts import CompanyFacts, _tighten_labelled
 
 log = logging.getLogger(__name__)
 
@@ -46,13 +46,16 @@ PAGE_JUNK = re.compile(
     r"^купить\s|интернет-магазин\w*\s+бренда|доставка по (росси|москв)|"
     r"[✔✓☑]|добавить в корзину|акции и скидки|контактные данные компании|"
     r"официальный сайт\s*$|новости компании|"
+    # ходовой шаблон с типовых сайтов: у гипсового комбината и у
+    # трикотажной фабрики он слово в слово одинаковый
+    r"наш интернет-магазин стал одним из первых|on-?line продажу|"
     # заглушки и служебные надписи
     r"работаем над улучшением (?:нашего )?сайта|заголовок|переключатель меню|"
     r"проложить маршрут|узнать больше о компании|задать вопрос|"
     # текст не про эту компанию: документация хостинга
-    r"прилинковать домен|направление домена|директори[юя] на сервере|"
+    r"прилинк\w*|домен\w* (?:никуда )?не направлен|панел[иь] управления|данную страницу|направление домена|директори[юя] на сервере|"
     # объявления, которые устареют завтра
-    r"уходит в (?:ежегодный )?корпоративный отпуск|отметьте в (?:своих )?календар|"
+    r"уходит в (?:ежегодный )?корпоративный отпуск|отметьте в (?:своих )?календар|в указанный период|отгрузка продукции|осуществляться не будут|"
     r"сообщить о контрафакте|"
     # телефоны в любом виде
     r"8\s*[\(-]?\s*\d{3}\s*[\)-]?\s*\d{3}[\s-]?\d{2}[\s-]?\d{2}|8\s*800\s*\d|"
@@ -76,7 +79,7 @@ LEADING_NUMBERS = re.compile(r"^\W*\d[\d\s.,]{2,}(?=[А-ЯA-Zа-яa-z])")
 AD_COPY = re.compile(
     r"(^я\s+(успе|купи|заказа|получи)|по сам[оы]й (низкой|выгодной) цене|"
     r"только на сайте|успей|спешите|звоните прямо сейчас|скидк[аи] до|"
-    r"^оптовые скидки|скидки при заказе|"
+    r"^оптовые скидки|скидки при заказе|по низким ценам|дешево\s*$|дёшево\s*$|"
     r"обратитесь к нашим специалистам|получите профессиональную консультацию|"
     r"наш[ие]+ специалист\w+ (?:свяжутся|помогут)|нашего банка)",
     re.I,
@@ -103,11 +106,31 @@ class Personalization:
         return len(self.text) >= floor
 
 
+# Если первое предложение само по себе длиннее — второе не берём. На сайтах
+# второе предложение сплошь и рядом про другое: у гипсового комбината следом
+# шло «наш интернет-магазин одним из первых начал on-line продажу одежды».
+SELF_SUFFICIENT = 80
+
+
 def _first_sentences(text: str, limit: int = MAX_SENTENCES) -> str:
     parts = re.split(r"(?<=[.!?])\s+", (text or "").strip())
     picked = [p for p in parts
-              if len(p) > 25 and not FLUFF.match(p) and not PAGE_JUNK.search(p)][:limit]
+              if len(p) > 25 and not FLUFF.match(p)
+              and not PAGE_JUNK.search(p) and not AD_COPY.search(p)][:limit]
+    if picked and len(picked[0]) >= SELF_SUFFICIENT:
+        picked = picked[:1]
+    elif len(picked) == 2 and _mostly_repeats(picked[0], picked[1]):
+        picked = picked[:1]
     return " ".join(picked).strip()
+
+
+def _mostly_repeats(first: str, second: str) -> bool:
+    """Второе предложение пересказывает первое — на сайтах это обычное дело,
+    когда описание собрано из заголовка и подзаголовка."""
+    def core(t):
+        return {w.lower() for w in re.findall(r"[А-Яа-яЁёA-Za-z]{4,}", t)}
+    a, b = core(first), core(second)
+    return bool(b) and len(a & b) / len(b) >= 0.5
 
 
 def _extractive(company: str, facts: CompanyFacts) -> Personalization:
@@ -118,6 +141,11 @@ def _extractive(company: str, facts: CompanyFacts) -> Personalization:
     if facts.facts:
         fact = facts.facts[0]
         cleaned = _tidy(fact.text)
+        if fact.match:
+            # Перед цифрой часто стоит заголовок соседнего блока: «На службе
+            # сельскому хозяйству С 2002 года наш завод…». Отрезаем его по
+            # найденной формулировке.
+            cleaned = _tidy(_tighten_labelled(cleaned, fact.match))
         lead = _first_sentences(_tidy(facts.description), 1)
         if len(cleaned) >= MIN_FACT_LENGTH:
             text = f"{cleaned.rstrip('.')}."
@@ -166,6 +194,8 @@ LEADING_JUNK = [
                r"о компании|преимущества|новости|главная)\s+(?=[А-ЯA-Z])", re.I),
     re.compile(r"^(?:[A-ZА-ЯЁ][A-ZА-ЯЁ\s]{6,})(?=[А-ЯA-Z][а-яa-z]|\d)"),
     re.compile(r"^\W*\d[\d\s.,]{2,}(?=[А-ЯA-Z])"),
+    # «Вектор-Бест» Все выпуски…» — вырезка началась с середины названия
+    re.compile(r"^[^«\"]{0,40}?[»\"]\s+(?=[А-ЯA-Z])"),
 ]
 
 
@@ -176,7 +206,7 @@ TRAILING_JUNK = re.compile(
     r"(?:"
     r"\s(?:главная|каталог|контакты|партнерам|партнёрам|блог|вакансии|"
     r"смотреть|подробнее|читать далее|в каталоге|наши успехи|преимущества|"
-    r"начать сотрудничество|получите доступ|оставить заявку)\b"
+    r"начать сотрудничество|получите доступ|оставить заявку|о компании|о нас)\b"
     r"|\s0\s+(?:лет|сделок|сотрудник|товар|наград|проект)"
     r"|\s\d{2}\.\d{2}\.\d{4}"
     r"|\sдата рождения"
@@ -201,9 +231,14 @@ def _cut_trailing_junk(text: str) -> str:
     return text[:match.start()].strip() if match else text
 
 
+_DANGLING_PREPOSITION = re.compile(
+    r"\s+(?:в|на|с|со|из|от|до|по|за|для|при|под|над|о|об|к|у|и|а)\.\s*$", re.I)
+
+
 def _drop_dangling_tail(text: str) -> str:
     """Убрать оборванный хвост вроде «…продукции, которые.» — обрезка по
     символам часто оставляет начало следующей фразы."""
+    text = _DANGLING_PREPOSITION.sub(".", text.strip())
     parts = [p for p in re.split(r"(?<=[.!?])\s+", text.strip()) if p]
     while len(parts) > 1 and len(re.findall(r"\w+", parts[-1])) < 4:
         parts.pop()
@@ -260,11 +295,31 @@ def _looks_like_menu(text: str) -> bool:
 
     tail = words[1:]
     capitalized = sum(1 for w in tail if w[:1].isupper())
-    if len(tail) >= 5 and capitalized / len(tail) >= 0.40:
+    # Доля заглавных — признак только для кириллицы. В английском с заглавной
+    # пишут названия продуктов и подряд идущие слова в них («Plate Rolling
+    # Machine»), и живое описание выглядело бы как меню.
+    cyrillic = sum(1 for w in words if re.match(r"[А-Яа-яЁё]", w))
+    if cyrillic / len(words) > 0.6 and len(tail) >= 5 and capitalized / len(tail) >= 0.40:
         return True
 
     unique = len({w.lower() for w in words})
-    return unique / len(words) < 0.65
+    if unique / len(words) < 0.65:
+        return True
+
+    # Ни одного знака конца предложения и несколько слов с заглавной посреди
+    # строки — так выглядит перечень разделов: «Научные исследования и
+    # разработки Производство, программирование и внедрение Гарантийное
+    # обслуживание Поставка сервисной аппаратуры».
+    if not re.search(r"[.!?]", text):
+        mid_caps = len(re.findall(r"(?<=[а-яёa-z]\s)[А-ЯЁA-Z]", text))
+        if mid_caps >= 3:
+            return True
+
+    # Три слова с заглавной подряд — список городов или пунктов меню,
+    # затесавшийся в середину: «Кривцово Санкт-Петербург Краснодар».
+    # Только для кириллицы: в английском подряд идущие заглавные — обычное
+    # дело в названиях («Plate Rolling Machine»), и это не меню.
+    return bool(re.search(r"(?<![.!?]\s)(?:[А-ЯЁ][а-яё-]{2,}\s+){3,}", text))
 
 
 def _is_readable(text: str) -> bool:

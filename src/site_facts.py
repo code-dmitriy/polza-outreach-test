@@ -53,6 +53,7 @@ class Fact:
     text: str
     kind: str
     source_url: str
+    match: str = ""   # сама найденная формулировка, например «с 2002 года»
 
 
 @dataclass
@@ -83,7 +84,8 @@ def _cut(text: str, limit: int) -> str:
     if len(text) <= limit:
         return text
     head = text[:limit]
-    return (head.rsplit(" ", 1)[0] if " " in head else head).rstrip(" ,;:-–—")
+    head = (head.rsplit(" ", 1)[0] if " " in head else head).rstrip(" ,;:-–—")
+    return head + "…"
 
 
 def _extract_emails(html: str, soup: BeautifulSoup) -> list[str]:
@@ -213,7 +215,7 @@ def _extract_facts(soup: BeautifulSoup, url: str) -> list[Fact]:
         # Порог низкий намеренно: «На рынке России с 2014 года» — 27 знаков,
         # и это ровно тот факт, ради которого всё и затевалось.
         if len(snippet) >= 25:
-            facts.append(Fact(text=snippet, kind=kind, source_url=url))
+            facts.append(Fact(text=snippet, kind=kind, source_url=url, match=phrase))
     return facts
 
 
